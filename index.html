@@ -118,6 +118,13 @@
     visibility: visible;
     opacity: 1;
   }
+  /* Matrix table */
+  .matrix { overflow:auto; margin-top:16px; }
+  .matrix table { width:100%; border-collapse:collapse; font-size:14px; }
+  .matrix th, .matrix td { border:1px solid var(--border); padding:6px 8px; text-align:center; }
+  .matrix th.name-col, .matrix td.name-col { text-align:left; background:#fafafa; min-width:140px; }
+  .matrix td.present { background: #e6f4ea; color:#065f46; font-weight:600; }
+  .matrix td.absent { color:#9ca3af; }
 </style>
 </head>
 <body>
@@ -143,6 +150,9 @@
 
     <button class="primary" onclick="processData()">추출하기 ▶</button>
     <button class="secondary" onclick="analyzeAllRanges()">모든 구간 자동 비교</button>
+    <label style="margin-left:8px">
+      <input type="checkbox" id="matrixToggle"> 매트릭스 보기
+    </label>
   </div>
 
   <div id="yearSelection"></div>
@@ -168,6 +178,19 @@ function splitColumns(line) {
   if (byComma.length > 1) return byComma;
   // 마지막으로 여러 공백(2개 이상) 또는 단일 공백으로 분리
   return line.split(/\s+/).map(s => s.trim()).filter(Boolean);
+}
+
+/* ---------- 유틸: 이름 정규화 (공백/특수문자 제거 등) ---------- */
+function normalizeName(name) {
+  if (!name || typeof name !== 'string') return '';
+  let s = name.trim();
+  // 제거하고 싶은 일반적인 구분자/기호들 일부 제거
+  s = s.replace(/[·•·\(\)\[\]\"\'\,\.]/g, '');
+  // 모든 공백 제거(김 나은 -> 김나은). 필요시 내부 공백을 단일 공백으로 바꿀 수도 있음
+  s = s.replace(/\s+/g, '');
+  // 라틴/한글/숫자/하이픈만 허용 (다른 특수문자 제거)
+  s = s.replace(/[^0-9A-Za-z\uAC00-\uD7AF\u3131-\u318E\-]/g, '');
+  return s;
 }
 
 /* ---------- 샘플 로드 ---------- */
@@ -207,7 +230,9 @@ function processData() {
   for (let i = 1; i < lines.length; i++) {
     const cols = splitColumns(lines[i]);
     for (let j = 0; j < Math.min(cols.length, yearCount); j++) {
-      const name = cols[j].trim();
+      // 정규화된 이름으로 추가하여 공백/특수문자 등으로 인한 중복을 줄임
+      const raw = cols[j] || '';
+      const name = normalizeName(raw);
       if (name !== "") yearSets[j].add(name);
     }
   }
@@ -347,6 +372,13 @@ function renderOutput(results) {
   // 아래에 전체 TSV 복사 버튼
   const tsvAll = makeTSVForResults(results);
   output.innerHTML += `<div style="margin-top:12px"><button class="primary" onclick='copyToClipboard(${JSON.stringify(tsvAll)})'>📋 모든 결과 TSV 복사 (스프레드시트용)</button></div>`;
+
+  // 매트릭스 보기 토글이 켜져 있으면 표시 (전체 연도 기준 매트릭스)
+  const showMatrix = document.getElementById('matrixToggle')?.checked;
+  if (showMatrix) {
+    output.innerHTML += `<div class="card"><div style="font-weight:600">연도별 매트릭스 <span style="color:#555">· ${headers[0]} ~ ${headers[headers.length-1]}</span></div><div id="matrixContainer" class="matrix"></div></div>`;
+    renderMatrix();
+  }
 }
 
 /* 카드 추가 */
@@ -407,6 +439,40 @@ function toast(msg) {
   t.textContent = msg;
   t.classList.add("show");
   setTimeout(() => t.classList.remove("show"), 1500);
+}
+
+/* ---------- 매트릭스 렌더 ---------- */
+function renderMatrix() {
+  const container = document.getElementById('matrixContainer');
+  if (!container) return;
+  // headers vs yearSets(이미 정규화된 이름들)
+  const yrs = headers.slice();
+  // union of all names across yearSets
+  const allNames = new Set();
+  yearSets.forEach(s => s.forEach(n => allNames.add(n)));
+  const names = [...allNames].sort((a,b)=>a.localeCompare(b,'ko'));
+
+  if (names.length === 0) {
+    container.innerHTML = '<p class="note">매트릭스에 표시할 이름이 없습니다.</p>';
+    return;
+  }
+
+  let html = '<div style="overflow:auto"><table><thead><tr><th class="name-col">이름</th>';
+  yrs.forEach(y => { html += `<th>${y}</th>`; });
+  html += '</tr></thead><tbody>';
+
+  // each name row
+  names.forEach(name => {
+    html += `<tr><td class="name-col">${name}</td>`;
+    for (let i = 0; i < yrs.length; i++) {
+      const present = yearSets[i].has(name);
+      html += `<td class="${present ? 'present' : 'absent'}">${present ? '●' : ''}</td>`;
+    }
+    html += '</tr>';
+  });
+
+  html += '</tbody></table></div>';
+  container.innerHTML = html;
 }
 </script>
 </body>
