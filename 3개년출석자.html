@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>N년 데이터 이름 추출기 (복구판)</title>
+
+<style>
+  :root {
+    --primary: #1976d2;
+    --primary-dark: #0f5ca3;
+    --border: #e2e8f0;
+    --card-bg: #ffffff;
+    --badge-bg: #e3f2fd;
+    --text-muted: #6b7280;
+    --radius: 8px;
+    --shadow: 0 2px 8px rgba(0,0,0,0.08);
+  }
+
+  body {
+    font-family: "Noto Sans KR", sans-serif;
+    background: #f7f9fc;
+    margin: 0;
+    padding: 30px;
+    display: flex;
+    justify-content: center;
+  }
+
+  .container {
+    width: 100%;
+    max-width: 860px;
+    background: white;
+    padding: 36px;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+  }
+
+  h1 { margin-top: 0; font-size: 26px; color: #111; text-align: center; }
+
+  textarea {
+    width: 100%;
+    height: 160px;
+    margin: 12px 0;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-family: monospace;
+    box-sizing: border-box;
+    resize: vertical;
+  }
+
+  button, select {
+    padding: 10px 18px;
+    font-size: 15px;
+    border: none;
+    border-radius: var(--radius);
+    cursor: pointer;
+  }
+
+  button.primary { background: var(--primary); color: white; font-weight: 500; }
+  button.primary:hover { background: var(--primary-dark); }
+
+  button.secondary { background: #e5e7eb; color: #111; }
+  button.secondary:hover { background: #d1d5db; }
+
+  .options { margin: 12px 0; display: flex; gap: 12px; align-items: center; }
+
+  .result { margin-top: 30px; }
+
+  .card {
+    background: var(--card-bg);
+    padding: 20px 24px;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    margin-top: 20px;
+    position: relative;
+  }
+
+  .badge {
+    background: var(--badge-bg);
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 14px;
+    margin-left: 8px;
+    color: var(--primary-dark);
+  }
+
+  .copy-btn {
+    position: absolute;
+    right: 16px;
+    top: 16px;
+    background: var(--primary);
+    color: white;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+  }
+  .copy-btn:hover { background: var(--primary-dark); }
+
+  .note { color: var(--text-muted); font-size: 14px; margin-top: 6px; }
+
+  /* Toast */
+  .toast {
+    visibility: hidden;
+    min-width: 200px;
+    background-color: #111;
+    color: #fff;
+    text-align: center;
+    border-radius: var(--radius);
+    padding: 10px;
+    position: fixed;
+    z-index: 10;
+    right: 20px;
+    bottom: 20px;
+    opacity: 0;
+    transition: opacity .25s;
+  }
+  .toast.show {
+    visibility: visible;
+    opacity: 1;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <h1>N년 데이터 이름 추출기</h1>
+  <p class="note">스프레드시트에서 표 전체(제목행 포함)를 복사하여 아래에 붙여넣으세요. (탭, 쉼표, 공백 구분을 지원합니다. 동명이인 등 디테일 처리가 미흡할 수 있습니다.)</p>
+
+  <button class="secondary" onclick="loadSample()">샘플 데이터 자동 입력</button>
+  <textarea id="input" placeholder="예:
+2023	2024	2025
+김나은	김아영	김나은
+김아영	이나은	최나은"></textarea>
+
+  <div class="options">
+    <label>최근 비교:
+      <select id="yearRange">
+        <option value="2">최근 2년</option>
+        <option value="3" selected>최근 3년</option>
+        <option value="4">최근 4년</option>
+      </select>
+    </label>
+
+    <button class="primary" onclick="processData()">추출하기 ▶</button>
+    <button class="secondary" onclick="analyzeAllRanges()">모든 구간 자동 비교</button>
+  </div>
+
+  <div id="yearSelection"></div>
+  <div class="result" id="output"></div>
+
+</div>
+
+<div id="toast" class="toast">메시지</div>
+
+<script>
+/* ---------- 전역 데이터 ---------- */
+let headers = [];       // ['2023','2024',...]
+let yearSets = [];      // [ Set(names for col0), Set(col1), ... ]
+
+/* ---------- 유틸: 안전한 행 분해 (우선 탭) ---------- */
+function splitColumns(line) {
+  if (typeof line !== 'string') return [];
+  // 우선 탭으로 분리
+  const byTab = line.split('\t').map(s => s.trim()).filter(Boolean);
+  if (byTab.length > 1) return byTab;
+  // 탭이 없으면 쉼표로 시도
+  const byComma = line.split(',').map(s => s.trim()).filter(Boolean);
+  if (byComma.length > 1) return byComma;
+  // 마지막으로 여러 공백(2개 이상) 또는 단일 공백으로 분리
+  return line.split(/\s+/).map(s => s.trim()).filter(Boolean);
+}
+
+/* ---------- 샘플 로드 ---------- */
+function loadSample() {
+  document.getElementById("input").value =
+`2023	2024	2025
+김나은	김아영	김나은
+김아영	이나은	최나은`;
+  toast("샘플 데이터 입력됨");
+}
+
+/* ---------- 메인: 데이터 파싱 및 준비 ---------- */
+function processData() {
+  const raw = (document.getElementById("input").value || "").trim();
+  if (!raw) {
+    toast("데이터를 입력하세요!");
+    return;
+  }
+
+  const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (lines.length < 2) {
+    toast("최소 제목행(연도)과 데이터행이 필요합니다.");
+    return;
+  }
+
+  // 헤더(제목행) 파싱
+  headers = splitColumns(lines[0]);
+  if (headers.length < 1) {
+    toast("헤더(연도)가 올바르지 않습니다.");
+    return;
+  }
+
+  const yearCount = headers.length;
+  yearSets = Array.from({length: yearCount}, () => new Set());
+
+  // 데이터행 파싱
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitColumns(lines[i]);
+    for (let j = 0; j < Math.min(cols.length, yearCount); j++) {
+      const name = cols[j].trim();
+      if (name !== "") yearSets[j].add(name);
+    }
+  }
+
+  // 최소 한 개의 데이터가 들어있는지 확인
+  const anyData = yearSets.some(s => s.size > 0);
+  if (!anyData) {
+    toast("데이터 행에서 이름을 찾지 못했습니다.");
+    return;
+  }
+
+  renderYearOptions();
+  toast("데이터가 성공적으로 파싱되었습니다.");
+  console.log("headers:", headers);
+  console.log("yearSets sizes:", yearSets.map(s => s.size));
+}
+
+/* ---------- 연도 선택 UI 렌더 ---------- */
+function renderYearOptions() {
+  if (!headers || headers.length === 0) return;
+  const n = parseInt(document.getElementById("yearRange").value, 10);
+  const container = document.getElementById("yearSelection");
+  container.innerHTML = `<p><b>비교할 연도 구간 선택:</b></p>`;
+
+  const options = [];
+  for (let i = 0; i <= headers.length - n; i++) {
+    options.push({ start: i, label: `${headers[i]} ~ ${headers[i+n-1]}` });
+  }
+
+  if (options.length === 0) {
+    container.innerHTML += `<p class="note">선택한 N개년(${n}) 으로 생성 가능한 구간이 없습니다.</p>`;
+    return;
+  }
+
+  options.forEach((opt, idx) => {
+    const id = `range_${idx}`;
+    container.innerHTML += `
+      <label style="margin-right:8px">
+        <input type="radio" name="yearRangeRadio" id="${id}" value="${opt.start}" ${idx===options.length-1 ? 'checked' : ''}>
+        ${opt.label}
+      </label>
+    `;
+  });
+
+  container.innerHTML += `<div style="margin-top:12px;">
+    <button class="primary" onclick="analyzeSelectedRange()">선택 구간만 분석</button>
+    <button class="secondary" style="margin-left:8px" onclick="analyzeAllRanges()">모든 구간 자동 비교</button>
+  </div>`;
+}
+
+/* ---------- 핵심: 구간 분석 함수 (안전하게 교집합 계산) ---------- */
+function intersectionOfSets(setsArray) {
+  if (!setsArray || setsArray.length === 0) return [];
+  // 시작 기준: 첫 세트(성능상의 이유)
+  let inter = new Set(setsArray[0]);
+  for (let i = 1; i < setsArray.length; i++) {
+    const next = setsArray[i];
+    inter = new Set([...inter].filter(x => next.has(x)));
+    if (inter.size === 0) break;
+  }
+  return [...inter].sort((a,b) => a.localeCompare(b, 'ko'));
+}
+
+function analyzeRange(startIndex, n) {
+  // recent sets for the selected window
+  const recentSets = yearSets.slice(startIndex, startIndex + n);
+  // years labels
+  const rangeYears = headers.slice(startIndex, startIndex + n);
+
+  // allNames = union of all yearSets
+  const allNamesUnion = new Set();
+  yearSets.forEach(s => s.forEach(name => allNamesUnion.add(name)));
+
+  // 전체(모든 연도) 등장자: intersection across ALL yearSets
+  const overallIntersection = intersectionOfSets(yearSets);
+
+  // 선택 구간 N개년 연속 등장자
+  const selectedIntersection = intersectionOfSets(recentSets);
+
+  return {
+    label: `${rangeYears[0]} ~ ${rangeYears[rangeYears.length - 1]}`,
+    years: rangeYears,
+    names: selectedIntersection,
+    allNames: overallIntersection,
+    unionNames: [...allNamesUnion].sort((a,b)=>a.localeCompare(b,'ko'))
+  };
+}
+
+/* ---------- 동작: 선택 구간만 분석 ---------- */
+function analyzeSelectedRange() {
+  if (!headers || headers.length === 0) { toast("먼저 데이터를 붙여넣고 추출하세요."); return; }
+  const n = parseInt(document.getElementById("yearRange").value, 10);
+  const radios = document.getElementsByName("yearRangeRadio");
+  if (!radios || radios.length === 0) {
+    toast("비교할 구간을 먼저 생성하세요.");
+    return;
+  }
+  let startIndex = 0;
+  for (const r of radios) if (r.checked) startIndex = parseInt(r.value, 10);
+
+  const res = analyzeRange(startIndex, n);
+  renderOutput([res]);
+}
+
+/* ---------- 모든 구간 자동 분석 (여러 결과) ---------- */
+function analyzeAllRanges() {
+  if (!headers || headers.length === 0) { toast("먼저 데이터를 붙여넣고 추출하세요."); return; }
+  const n = parseInt(document.getElementById("yearRange").value, 10);
+  const results = [];
+  for (let i = 0; i <= headers.length - n; i++) {
+    results.push(analyzeRange(i, n));
+  }
+  renderOutput(results);
+}
+
+/* ---------- 출력 렌더(카드) + TSV 복사 텍스트 구성 ---------- */
+function renderOutput(results) {
+  const output = document.getElementById("output");
+  output.innerHTML = "";
+
+  if (!results || results.length === 0) {
+    output.innerHTML = `<p class="note">결과가 없습니다.</p>`;
+    return;
+  }
+
+  // 전체(모든 연도) 표시는 첫 결과의 allNames 사용 (동일하므로)
+  const fullLabel = `${headers[0]} ~ ${headers[headers.length - 1]}`;
+  const overall = results[0].allNames || [];
+  // 전체 카드
+  addCard("전체(모든 연도에 등장)", fullLabel, overall, makeTSVRow("전체", fullLabel, overall));
+
+  // 각 구간 카드
+  results.forEach(res => {
+    addCard(`${res.years.length}개년 공통 등장`, res.label, res.names, makeTSVRow("선택구간", res.label, res.names));
+  });
+
+  // 아래에 전체 TSV 복사 버튼
+  const tsvAll = makeTSVForResults(results);
+  output.innerHTML += `<div style="margin-top:12px"><button class="primary" onclick='copyToClipboard(${JSON.stringify(tsvAll)})'>📋 모든 결과 TSV 복사 (스프레드시트용)</button></div>`;
+}
+
+/* 카드 추가 */
+function addCard(title, label, list, tsvTextForThisCard) {
+  const output = document.getElementById("output");
+  const namesStr = (Array.isArray(list) ? list.join(", ") : (list || "없음"));
+  const count = (Array.isArray(list) ? list.length : 0);
+
+  // escape for injection safety in attributes - but we're not injecting arbitrary HTML, so minimal
+  const safeNames = namesStr.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  output.innerHTML += `
+    <div class="card">
+      <button class="copy-btn" onclick='copyToClipboard(${JSON.stringify(tsvTextForThisCard)})'>복사</button>
+      <div style="font-weight:600">${title} <span style="color:#555">· ${label}</span>
+        <span class="badge">${count}명</span>
+      </div>
+      <p style="margin-top:12px">${safeNames}</p>
+    </div>
+  `;
+}
+
+/* TSV helper: single row (구분, 연도범위, 이름1,이름2,...) */
+function makeTSVRow(kind, label, namesArray) {
+  const names = (Array.isArray(namesArray) ? namesArray : []);
+  // 결과는 탭으로 구분: 구분 \t 연도범위 \t 이름1,이름2,...
+  return `${kind}\t${label}\t${names.join(", ")}`;
+}
+
+/* 모든 결과에 대한 TSV (여러 행) */
+function makeTSVForResults(results) {
+  const rows = [["구분", "연도범위", "이름(쉼표구분)"]];
+  // 전체
+  const overall = results[0]?.allNames || [];
+  rows.push(["전체(모든연도)", `${headers[0]} ~ ${headers[headers.length-1]}`, overall.join(", ")]);
+  // 각 구간
+  results.forEach(res => {
+    rows.push([`${res.years.length}개년`, res.label, (res.names || []).join(", ")]);
+  });
+  return rows.map(r => r.join("\t")).join("\n");
+}
+
+/* ---------- 복사 & 토스트 ---------- */
+function copyToClipboard(text) {
+  if (!text) { toast("복사할 텍스트가 없습니다."); return; }
+  navigator.clipboard.writeText(text)
+    .then(() => {
+      toast("결과가 복사되었습니다. 스프레드시트에 붙여넣기 하세요.");
+    })
+    .catch(err => {
+      console.error("clipboard error:", err);
+      toast("복사 실패: 브라우저 권한을 확인하세요.");
+    });
+}
+
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 1500);
+}
+</script>
+</body>
+</html>
